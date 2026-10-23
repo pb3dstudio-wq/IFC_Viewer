@@ -84299,7 +84299,7 @@
           return model;
         }
         async setWasmPath(path) {
-          this.state.api.SetWasmPath(path);
+          this.state.api.SetWasmPath(path, true);
           this.state.wasmPath = path;
         }
         setupThreeMeshBVH(computeBoundsTree, disposeBoundsTree, acceleratedRaycast) {
@@ -84789,7 +84789,7 @@
         ground.receiveShadow = true;
         scene.add(ground);
         const loader = new IFCLoader();
-        loader.ifcManager.setWasmPath("./wasm/");
+        loader.ifcManager.setWasmPath(new URL("./wasm/", window.location.href).href);
         let model = null, modelID = null, spatial = null, selectedID = null, hidden = /* @__PURE__ */ new Set(), isolated = null, mode = "select", measurePoints = [], measureObjects = [];
         const raycaster = new Raycaster(), mouse = new Vector2(), clipPlane = new Plane(new Vector3(0, -1, 0), 0);
         let clipOn = false;
