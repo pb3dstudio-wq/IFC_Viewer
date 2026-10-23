@@ -7,17 +7,6 @@
   <title>Laing O'Rourke Immersive IFC Viewer</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="./css/styles.css">
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js",
-      "three/": "https://cdn.jsdelivr.net/npm/three@0.152.2/",
-      "three/examples/jsm/utils/BufferGeometryUtils": "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/utils/BufferGeometryUtils.js",
-      "web-ifc-three": "https://cdn.jsdelivr.net/npm/web-ifc-three@0.0.126/IFCLoader.js",
-      "web-ifc": "https://cdn.jsdelivr.net/npm/web-ifc@0.0.43/web-ifc-api.js"
-    }
-  }
-  </script>
 </head>
 <body>
   <main class="immersive-shell">
@@ -76,6 +65,49 @@
     </aside>
   </main>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="./js/app.js"></script>
+  <script src="./js/viewer.bundle.js" defer></script>
+
+  <div id="startup-diagnostic" class="startup-diagnostic" role="alert" aria-live="assertive" hidden>
+    <div class="diagnostic-card">
+      <h2>VIEWER COULD NOT START</h2>
+      <p id="diagnostic-summary">The 3D viewer did not initialise.</p>
+      <dl>
+        <div><dt>JavaScript</dt><dd id="diag-js">Checking...</dd></div>
+        <div><dt>WebGL</dt><dd id="diag-webgl">Checking...</dd></div>
+        <div><dt>WebAssembly</dt><dd id="diag-wasm">Checking...</dd></div>
+      </dl>
+      <p class="diagnostic-help">If this appears only in Immersive Suite, the embedded browser may not provide the required WebGL or WebAssembly features.</p>
+    </div>
+  </div>
+  <script>
+  (function () {
+    window.__IFC_VIEWER_READY__ = false;
+    function supportsWebGL() {
+      try {
+        var c = document.createElement('canvas');
+        return !!(window.WebGL2RenderingContext && c.getContext('webgl2')) || !!(window.WebGLRenderingContext && (c.getContext('webgl') || c.getContext('experimental-webgl')));
+      } catch (e) { return false; }
+    }
+    window.__showIFCDiagnostic = function (detail) {
+      var panel = document.getElementById('startup-diagnostic');
+      if (!panel) return;
+      panel.hidden = false;
+      document.getElementById('diag-js').textContent = 'Available';
+      document.getElementById('diag-webgl').textContent = supportsWebGL() ? 'Available' : 'Unavailable';
+      document.getElementById('diag-wasm').textContent = typeof WebAssembly === 'object' ? 'Available' : 'Unavailable';
+      document.getElementById('diagnostic-summary').textContent = detail || 'The 3D viewer did not initialise.';
+    };
+    window.addEventListener('error', function (event) {
+      window.__showIFCDiagnostic('Startup error: ' + (event.message || 'Unknown JavaScript error'));
+    });
+    window.addEventListener('unhandledrejection', function (event) {
+      var reason = event.reason && (event.reason.message || String(event.reason));
+      window.__showIFCDiagnostic('Startup error: ' + (reason || 'Unhandled viewer error'));
+    });
+    window.setTimeout(function () {
+      if (!window.__IFC_VIEWER_READY__) window.__showIFCDiagnostic('The viewer script did not finish initialising.');
+    }, 8000);
+  }());
+  </script>
 </body>
 </html>
