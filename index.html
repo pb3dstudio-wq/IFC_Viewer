@@ -1,13 +1,12 @@
 <!doctype html>
 <html lang="en-GB">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="referrer" content="no-referrer" />
-  <title>Organisation IFC Viewer</title>
-  <link rel="icon" href="data:," />
-  <link rel="stylesheet" href="./css/styles.css" />
-
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="referrer" content="no-referrer">
+  <title>Laing O'Rourke Immersive IFC Viewer</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./css/styles.css">
   <script type="importmap">
   {
     "imports": {
@@ -21,78 +20,61 @@
   </script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark">IFC</span>
-      <div>
-        <strong>Organisation IFC Viewer</strong>
-        <small>Browser-based model review</small>
+  <main class="immersive-shell">
+    <aside class="zone zone-left" aria-label="Model structure screen">
+      <header class="side-header">
+        <div class="brand-block"><span>LAING<br>O'ROURKE</span></div>
+        <div><h1>MODEL STRUCTURE</h1><p>Touch an eye to show or hide</p></div>
+      </header>
+      <div class="side-tools">
+        <input id="tree-search" type="search" placeholder="Search model structure" aria-label="Search model structure">
+        <button id="expand-tree" class="compact-button" type="button">Expand</button>
+        <button id="collapse-tree" class="compact-button" type="button">Collapse</button>
       </div>
-    </div>
-
-    <div class="actions">
-      <label class="button primary" for="file-input">Open IFC</label>
-      <input id="file-input" type="file" accept=".ifc" hidden />
-      <button id="fit-btn" class="button" type="button">Fit model</button>
-      <button id="theme-btn" class="button" type="button">Theme</button>
-      <button id="fullscreen-btn" class="button" type="button">Full screen</button>
-    </div>
-  </header>
-
-  <main class="layout">
-    <aside class="panel left-panel">
-      <div class="panel-heading">
-        <strong>Model structure</strong>
-        <button id="collapse-tree" class="icon-button" title="Collapse all">−</button>
-      </div>
-      <input id="tree-search" class="search" type="search" placeholder="Search model tree" />
-      <div id="model-tree" class="tree">
-        <p class="muted">Open an IFC file to populate the model tree.</p>
-      </div>
+      <div id="model-tree" class="tree"><p class="empty-state">Open an IFC model to populate the structure.</p></div>
     </aside>
 
-    <section id="viewer" class="viewer" aria-label="3D IFC model viewer">
+    <section id="viewer" class="zone zone-centre" aria-label="3D IFC viewport">
+      <header class="centre-header">
+        <div class="title-group"><strong>IMMERSIVE IFC VIEWER</strong><span id="model-name">No model loaded</span></div>
+        <div class="primary-actions">
+          <label class="button primary" for="file-input">OPEN IFC</label>
+          <input id="file-input" type="file" accept=".ifc" hidden>
+          <button id="fit-btn" class="button" type="button">FIT VIEW</button>
+          <button id="fullscreen-btn" class="button" type="button">FULLSCREEN</button>
+        </div>
+      </header>
+
       <div id="drop-zone" class="drop-zone">
         <div class="drop-card">
-          <div class="drop-icon">3D</div>
-          <h1>Open an IFC model</h1>
-          <p>Drag an .ifc file here or use <strong>Open IFC</strong>.</p>
-          <p class="small">The selected file is processed in this browser session.</p>
+          <div class="drop-mark">IFC</div>
+          <h2>Open an IFC model</h2>
+          <p>Touch <strong>OPEN IFC</strong> or drag a file into the centre screen.</p>
         </div>
       </div>
 
-      <div class="toolbar" aria-label="Viewer tools">
-        <button id="select-tool" class="tool active" title="Select elements">Select</button>
-        <button id="measure-tool" class="tool" title="Measure between two points">Measure</button>
-        <button id="clip-tool" class="tool" title="Toggle horizontal clipping plane">Section</button>
-        <button id="hide-btn" class="tool" title="Hide selected element">Hide</button>
-        <button id="isolate-btn" class="tool" title="Isolate selected element">Isolate</button>
-        <button id="show-all-btn" class="tool" title="Restore all elements">Show all</button>
-      </div>
-
-      <div id="status" class="status">Ready</div>
+      <nav class="viewport-toolbar" aria-label="Model tools">
+        <button id="select-tool" class="tool active" type="button">SELECT</button>
+        <button id="measure-tool" class="tool" type="button">MEASURE</button>
+        <button id="clip-tool" class="tool" type="button">SECTION</button>
+        <button id="hide-btn" class="tool" type="button">HIDE</button>
+        <button id="isolate-btn" class="tool" type="button">ISOLATE</button>
+        <button id="show-all-btn" class="tool" type="button">SHOW ALL</button>
+      </nav>
+      <div class="navigation-hint">ONE FINGER: ROTATE · TWO FINGERS: PAN / ZOOM</div>
+      <div id="status" class="status">READY</div>
     </section>
 
-    <aside class="panel right-panel">
-      <div class="tabs">
-        <button class="tab active" data-tab="properties">Properties</button>
-        <button class="tab" data-tab="categories">Categories</button>
+    <aside class="zone zone-right" aria-label="Properties and categories screen">
+      <header class="side-header right-title"><div><h1>MODEL DATA</h1><p>Properties and visibility controls</p></div></header>
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="properties" type="button">PROPERTIES</button>
+        <button class="tab" data-tab="categories" type="button">CATEGORIES</button>
       </div>
-
-      <section id="properties-tab" class="tab-content active">
-        <div id="properties">
-          <p class="muted">Select an element to inspect its IFC properties.</p>
-        </div>
-      </section>
-
-      <section id="categories-tab" class="tab-content">
-        <div id="categories">
-          <p class="muted">Categories appear after a model is loaded.</p>
-        </div>
-      </section>
+      <section id="properties-tab" class="tab-content active"><div id="properties"><p class="empty-state">Select an element to inspect its IFC properties.</p></div></section>
+      <section id="categories-tab" class="tab-content"><div id="categories"><p class="empty-state">Categories appear after a model is loaded.</p></div></section>
     </aside>
   </main>
-
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="./js/app.js"></script>
 </body>

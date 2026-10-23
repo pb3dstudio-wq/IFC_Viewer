@@ -1,425 +1,62 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { IFCLoader } from 'web-ifc-three';
 
-const $ = id => document.getElementById(id);
-const viewer = $('viewer');
-const status = $('status');
-const toast = $('toast');
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xdde3e6);
-const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100000);
-camera.position.set(12, 10, 12);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.localClippingEnabled = true;
+const $=id=>document.getElementById(id), viewer=$('viewer'), status=$('status'), toast=$('toast');
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(42,1,.05,100000);
+camera.position.set(12,9,12);
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setClearColor(0x000000,0);
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.12;
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.localClippingEnabled=true;
 viewer.appendChild(renderer.domElement);
-const labelRenderer = new CSS2DRenderer();
-labelRenderer.domElement.style.position = 'absolute';
-labelRenderer.domElement.style.inset = '0';
-labelRenderer.domElement.style.pointerEvents = 'none';
-viewer.appendChild(labelRenderer.domElement);
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-scene.add(new THREE.HemisphereLight(0xffffff, 0x58636d, 2.2));
-const sun = new THREE.DirectionalLight(0xffffff, 2.5);
-sun.position.set(15, 30, 20);
-scene.add(sun);
-const grid = new THREE.GridHelper(100, 100, 0x666666, 0xb7b7b7);
-scene.add(grid);
-
-const loader = new IFCLoader();
-loader.ifcManager.setWasmPath('https://cdn.jsdelivr.net/npm/web-ifc@0.0.43/');
-let model = null, modelID = null, spatial = null, selectedID = null;
-let hiddenIDs = new Set(), isolatedIDs = null, mode = 'select';
-let measurePoints = [], measureObjects = [];
-const raycaster = new THREE.Raycaster(), mouse = new THREE.Vector2();
-const clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
-let clipOn = false;
-
-function say(message, error = false) {
-  status.textContent = message;
-  toast.textContent = message;
-  toast.style.background = error ? '#92111b' : '#000';
-  toast.classList.add('show');
-  clearTimeout(say.timer);
-  say.timer = setTimeout(() => toast.classList.remove('show'), 2800);
-}
-function resize() {
-  const r = viewer.getBoundingClientRect();
-  camera.aspect = r.width / r.height;
-  camera.updateProjectionMatrix();
-  renderer.setSize(r.width, r.height, false);
-  labelRenderer.setSize(r.width, r.height);
-}
-window.addEventListener('resize', resize);
-resize();
-(function animate() {
-  requestAnimationFrame(animate);
-  controls.update();
-  renderer.render(scene, camera);
-  labelRenderer.render(scene, camera);
-})();
-
-async function openIFC(file) {
-  if (!file || !file.name.toLowerCase().endsWith('.ifc')) return say('Please select an .ifc file.', true);
-  say(`Loading ${file.name}…`);
-  $('drop-zone').style.display = 'none';
-  clearModel();
-  const url = URL.createObjectURL(file);
-  try {
-    model = await loader.loadAsync(url, e => {
-      if (e.total) status.textContent = `Loading ${Math.round(e.loaded / e.total * 100)}%`;
-    });
-    modelID = model.modelID;
-    scene.add(model);
-    spatial = await loader.ifcManager.getSpatialStructure(modelID, true);
-    buildTree(spatial);
-    buildCategories(spatial);
-    fitModel();
-    say(`${file.name} loaded`);
-  } catch (err) {
-    console.error(err);
-    $('drop-zone').style.display = 'grid';
-    say('The IFC could not be opened. Check the browser console.', true);
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-function clearModel() {
-  if (model) {
-    scene.remove(model);
-    try { loader.ifcManager.close(modelID); } catch {}
-    model = null;
-  }
-  clearSelection();
-  hiddenIDs.clear();
-  isolatedIDs = null;
-  spatial = null;
-  modelID = null;
-  $('model-tree').innerHTML = '';
-  $('categories').innerHTML = '';
-  $('properties').innerHTML = '<p class="muted">Select an element to inspect its IFC properties.</p>';
-  clearMeasurements();
-}
-function fitModel() {
-  if (!model) return;
-  const box = new THREE.Box3().setFromObject(model);
-  const size = box.getSize(new THREE.Vector3());
-  const centre = box.getCenter(new THREE.Vector3());
-  const maximum = Math.max(size.x, size.y, size.z) || 10;
-  camera.near = Math.max(maximum / 10000, 0.01);
-  camera.far = maximum * 100;
-  camera.updateProjectionMatrix();
-  camera.position.copy(centre).add(new THREE.Vector3(maximum * 0.9, maximum * 0.7, maximum * 0.9));
-  controls.target.copy(centre);
-  controls.update();
-  grid.position.y = box.min.y - 0.01;
-  grid.scale.setScalar(Math.max(maximum / 50, 0.2));
-  clipPlane.constant = centre.y;
-}
-function leafIDs(node, output = []) {
-  if (node.expressID !== undefined && (!node.children || !node.children.length)) output.push(node.expressID);
-  (node.children || []).forEach(child => leafIDs(child, output));
-  return output;
-}
-function escapeHTML(value) {
-  return String(value ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
-}
-function buildTree(root) {
-  const host = $('model-tree');
-  host.innerHTML = '';
-  host.appendChild(treeNode(root, true));
-  updateEyeButtons();
-}
-function treeNode(node, open = false) {
-  const details = document.createElement('details');
-  details.dataset.id = node.expressID;
-  details.open = open;
-  const summary = document.createElement('summary');
-  const label = document.createElement('span');
-  label.className = 'tree-label';
-  label.textContent = `${node.type || 'ITEM'} · ${node.expressID}`;
-  label.addEventListener('click', e => {
-    e.stopPropagation();
-    if (node.expressID !== undefined) selectByID(node.expressID, true);
-  });
-  const eye = document.createElement('button');
-  eye.type = 'button';
-  eye.className = 'eye-button';
-  eye.textContent = '◉';
-  eye.title = 'Hide this item and its contents';
-  eye.dataset.ids = leafIDs(node, []).join(',');
-  eye.addEventListener('click', e => {
-    e.preventDefault();
-    e.stopPropagation();
-    const ids = eye.dataset.ids.split(',').filter(Boolean).map(Number);
-    const currentlyVisible = ids.some(id => !hiddenIDs.has(id));
-    ids.forEach(id => currentlyVisible ? hiddenIDs.add(id) : hiddenIDs.delete(id));
-    isolatedIDs = null;
-    refreshVisibility();
-    updateEyeButtons();
-    say(currentlyVisible ? 'Model item hidden' : 'Model item shown');
-  });
-  summary.append(label, eye);
-  details.appendChild(summary);
-  (node.children || []).forEach(child => details.appendChild(treeNode(child, false)));
-  return details;
-}
-function updateEyeButtons() {
-  document.querySelectorAll('.eye-button').forEach(eye => {
-    const ids = eye.dataset.ids.split(',').filter(Boolean).map(Number);
-    const allHidden = ids.length && ids.every(id => hiddenIDs.has(id));
-    eye.classList.toggle('hidden', allHidden);
-    eye.textContent = allHidden ? '⊘' : '◉';
-    eye.title = allHidden ? 'Show this item and its contents' : 'Hide this item and its contents';
-  });
-}
-function buildCategories(root) {
-  const map = new Map();
-  (function walk(node) {
-    if (node.expressID !== undefined && (!node.children || !node.children.length)) {
-      const key = node.type || 'IFCITEM';
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(node.expressID);
-    }
-    (node.children || []).forEach(walk);
-  })(root);
-  const host = $('categories');
-  host.innerHTML = '';
-  [...map.entries()].sort().forEach(([name, ids]) => {
-    const row = document.createElement('div');
-    row.className = 'category-row';
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = true;
-    checkbox.addEventListener('change', () => {
-      ids.forEach(id => checkbox.checked ? hiddenIDs.delete(id) : hiddenIDs.add(id));
-      isolatedIDs = null;
-      refreshVisibility();
-      updateEyeButtons();
-    });
-    const label = document.createElement('label');
-    label.textContent = name;
-    const badge = document.createElement('span');
-    badge.className = 'badge';
-    badge.textContent = ids.length;
-    row.append(checkbox, label, badge);
-    host.appendChild(row);
-  });
-}
-function hit(event) {
-  if (!model) return null;
-  const r = renderer.domElement.getBoundingClientRect();
-  mouse.x = ((event.clientX - r.left) / r.width) * 2 - 1;
-  mouse.y = -((event.clientY - r.top) / r.height) * 2 + 1;
-  raycaster.setFromCamera(mouse, camera);
-  const hits = raycaster.intersectObject(model, true);
-  if (!hits.length) return null;
-  const h = hits[0];
-  const id = loader.ifcManager.getExpressId(h.object.geometry, h.faceIndex);
-  return { ...h, id };
-}
-renderer.domElement.addEventListener('pointerdown', e => {
-  if (e.button !== 0) return;
-  const h = hit(e);
-  if (!h) return;
-  if (mode === 'measure') addMeasurePoint(h.point);
-  else selectByID(h.id, true);
-});
-async function selectByID(id, showProps) {
-  if (id === undefined || id === null || !model) return;
-  selectedID = id;
-  clearHighlight();
-  loader.ifcManager.createSubset({
-    modelID,
-    ids: [id],
-    removePrevious: true,
-    customID: 'highlight',
-    material: new THREE.MeshBasicMaterial({ color: 0xffed00, depthTest: false, transparent: true, opacity: 0.78 })
-  });
-  if (showProps) await showProperties(id);
-  document.querySelectorAll('.tree .selected').forEach(n => n.classList.remove('selected'));
-  const match = document.querySelector(`.tree details[data-id="${id}"]`);
-  if (match) {
-    match.classList.add('selected');
-    let parent = match.parentElement;
-    while (parent && parent.tagName === 'DETAILS') {
-      parent.open = true;
-      parent = parent.parentElement;
-    }
-  }
-}
-function clearHighlight() {
-  if (modelID !== null) try { loader.ifcManager.removeSubset(modelID, null, 'highlight'); } catch {}
-}
-function clearSelection() {
-  selectedID = null;
-  clearHighlight();
-}
-async function showProperties(id) {
-  const host = $('properties');
-  host.innerHTML = '<p class="muted">Loading properties…</p>';
-  try {
-    const identity = await loader.ifcManager.getItemProperties(modelID, id, true);
-    const groups = [
-      ['Identity', identity],
-      ['Property sets', await loader.ifcManager.getPropertySets(modelID, id, true)],
-      ['Type', await loader.ifcManager.getTypeProperties(modelID, id, true)],
-      ['Materials', await loader.ifcManager.getMaterialsProperties(modelID, id, true)]
-    ];
-    host.innerHTML = '';
-    groups.forEach(([title, data], index) => host.appendChild(renderProperties(title, data, index === 0)));
-    document.querySelector('[data-tab="properties"]').click();
-  } catch (err) {
-    console.error(err);
-    host.innerHTML = '<p class="muted">Properties could not be read for this element.</p>';
-  }
-}
-function primitive(value) {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'object') {
-    if ('value' in value) return value.value;
-    if ('Name' in value && value.Name?.value) return value.Name.value;
-    return JSON.stringify(value, (k, x) => ['expressID', 'type'].includes(k) ? x : (typeof x === 'object' && x && 'value' in x ? x.value : x)).slice(0, 500);
-  }
-  return value;
-}
-function renderProperties(title, data, open = false) {
-  const group = document.createElement('details');
-  group.className = 'property-group';
-  group.open = open;
-  const summary = document.createElement('summary');
-  summary.textContent = title;
-  group.appendChild(summary);
-  const list = Array.isArray(data) ? data : [data];
-  let count = 0;
-  for (const object of list) {
-    if (!object || typeof object !== 'object') continue;
-    for (const [key, value] of Object.entries(object)) {
-      if (['expressID', 'type'].includes(key) || value === null || value === undefined) continue;
-      const row = document.createElement('div');
-      row.className = 'property-row';
-      row.innerHTML = `<span>${escapeHTML(key)}</span><span>${escapeHTML(primitive(value))}</span>`;
-      group.appendChild(row);
-      if (++count > 120) break;
-    }
-    if (count > 120) break;
-  }
-  if (!count) {
-    const p = document.createElement('p');
-    p.className = 'muted';
-    p.style.padding = '0 10px';
-    p.textContent = 'No values returned.';
-    group.appendChild(p);
-  }
-  return group;
-}
-function refreshVisibility() {
-  if (!model) return;
-  try { loader.ifcManager.removeSubset(modelID, null, 'visibility'); } catch {}
-  const all = leafIDs(spatial, []);
-  const ids = isolatedIDs ? [...isolatedIDs] : all.filter(id => !hiddenIDs.has(id));
-  model.visible = false;
-  if (ids.length) loader.ifcManager.createSubset({ modelID, ids, removePrevious: true, customID: 'visibility', scene, applyBVH: false });
-}
-$('hide-btn').onclick = () => {
-  if (selectedID === null) return say('Select an element first.', true);
-  hiddenIDs.add(selectedID);
-  isolatedIDs = null;
-  clearSelection();
-  refreshVisibility();
-  updateEyeButtons();
-  say('Selected element hidden');
-};
-$('isolate-btn').onclick = () => {
-  if (selectedID === null) return say('Select an element first.', true);
-  isolatedIDs = new Set([selectedID]);
-  refreshVisibility();
-  say('Selected element isolated');
-};
-$('show-all-btn').onclick = () => {
-  hiddenIDs.clear();
-  isolatedIDs = null;
-  if (model) model.visible = true;
-  try { loader.ifcManager.removeSubset(modelID, null, 'visibility'); } catch {}
-  document.querySelectorAll('#categories input').forEach(x => x.checked = true);
-  updateEyeButtons();
-  say('All elements restored');
-};
-function setMode(newMode) {
-  mode = newMode;
-  document.querySelectorAll('.tool').forEach(b => b.classList.remove('active'));
-  $(newMode === 'measure' ? 'measure-tool' : 'select-tool').classList.add('active');
-  say(newMode === 'measure' ? 'Measurement: select two points' : 'Selection tool active');
-}
-$('select-tool').onclick = () => setMode('select');
-$('measure-tool').onclick = () => { clearMeasurements(); setMode('measure'); };
-function addMeasurePoint(point) {
-  measurePoints.push(point.clone());
-  const dot = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 16), new THREE.MeshBasicMaterial({ color: 0xe30613, depthTest: false }));
-  dot.position.copy(point);
-  scene.add(dot);
-  measureObjects.push(dot);
-  if (measurePoints.length === 2) {
-    const [a, b] = measurePoints;
-    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), new THREE.LineBasicMaterial({ color: 0xe30613, depthTest: false }));
-    scene.add(line);
-    measureObjects.push(line);
-    const distance = a.distanceTo(b);
-    const labelElement = document.createElement('div');
-    labelElement.className = 'measure-label';
-    labelElement.textContent = `${distance.toFixed(3)} model units`;
-    const label = new CSS2DObject(labelElement);
-    label.position.copy(a.clone().add(b).multiplyScalar(0.5));
-    scene.add(label);
-    measureObjects.push(label);
-    say(`Distance: ${distance.toFixed(3)} model units`);
-    setMode('select');
-  }
-}
-function clearMeasurements() {
-  measureObjects.forEach(object => scene.remove(object));
-  measureObjects = [];
-  measurePoints = [];
-}
-$('clip-tool').onclick = () => {
-  if (!model) return say('Open a model first.', true);
-  clipOn = !clipOn;
-  renderer.clippingPlanes = clipOn ? [clipPlane] : [];
-  $('clip-tool').classList.toggle('active', clipOn);
-  say(clipOn ? 'Horizontal section enabled.' : 'Section disabled.');
-};
-$('file-input').addEventListener('change', e => openIFC(e.target.files[0]));
-['dragenter', 'dragover'].forEach(type => viewer.addEventListener(type, e => { e.preventDefault(); $('drop-zone').classList.add('drag'); }));
-['dragleave', 'drop'].forEach(type => viewer.addEventListener(type, e => { e.preventDefault(); $('drop-zone').classList.remove('drag'); }));
-viewer.addEventListener('drop', e => openIFC(e.dataTransfer.files[0]));
-$('fit-btn').onclick = fitModel;
-$('theme-btn').onclick = () => {
-  document.body.classList.toggle('dark');
-  scene.background = new THREE.Color(document.body.classList.contains('dark') ? 0x101416 : 0xdde3e6);
-};
-$('fullscreen-btn').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
-$('collapse-tree').onclick = () => document.querySelectorAll('.tree details').forEach(d => d.open = false);
-$('tree-search').addEventListener('input', e => {
-  const query = e.target.value.toLowerCase();
-  document.querySelectorAll('.tree details').forEach(details => {
-    const text = details.querySelector(':scope > summary .tree-label')?.textContent.toLowerCase() || '';
-    details.style.display = !query || text.includes(query) ? '' : 'none';
-    if (query && text.includes(query)) {
-      let parent = details.parentElement;
-      while (parent && parent.tagName === 'DETAILS') {
-        parent.style.display = '';
-        parent.open = true;
-        parent = parent.parentElement;
-      }
-    }
-  });
-});
-document.querySelectorAll('.tab').forEach(tab => tab.onclick = () => {
-  document.querySelectorAll('.tab,.tab-content').forEach(x => x.classList.remove('active'));
-  tab.classList.add('active');
-  $(tab.dataset.tab + '-tab').classList.add('active');
-});
+const pmrem=new THREE.PMREMGenerator(renderer);
+scene.environment=pmrem.fromScene(new RoomEnvironment(renderer),.04).texture;
+const labels=new CSS2DRenderer();
+labels.domElement.style.cssText='position:absolute;inset:0;pointer-events:none;z-index:2';
+viewer.appendChild(labels.domElement);
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;controls.dampingFactor=.075;controls.screenSpacePanning=true;controls.touches={ONE:THREE.TOUCH.ROTATE,TWO:THREE.TOUCH.DOLLY_PAN};
+const hemi=new THREE.HemisphereLight(0xffffff,0x26333b,1.15);scene.add(hemi);
+const key=new THREE.DirectionalLight(0xffffff,3.3);key.position.set(25,38,18);key.castShadow=true;key.shadow.mapSize.set(2048,2048);key.shadow.bias=-.00015;key.shadow.normalBias=.035;scene.add(key);
+const fill=new THREE.DirectionalLight(0xb9dfff,.75);fill.position.set(-20,12,-18);scene.add(fill);
+const grid=new THREE.GridHelper(200,100,0x6f7e85,0xaebbc1);scene.add(grid);
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(500,500),new THREE.ShadowMaterial({color:0x10202a,opacity:.28}));ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);
+const loader=new IFCLoader();loader.ifcManager.setWasmPath('https://cdn.jsdelivr.net/npm/web-ifc@0.0.43/');
+let model=null,modelID=null,spatial=null,selectedID=null,hidden=new Set(),isolated=null,mode='select',measurePoints=[],measureObjects=[];
+const raycaster=new THREE.Raycaster(),mouse=new THREE.Vector2(),clipPlane=new THREE.Plane(new THREE.Vector3(0,-1,0),0);let clipOn=false;
+function message(text,error=false){status.textContent=text.toUpperCase();toast.textContent=text;toast.style.background=error?'#8e0b13':'#000';toast.classList.add('show');clearTimeout(message.t);message.t=setTimeout(()=>toast.classList.remove('show'),2600)}
+function resize(){const r=viewer.getBoundingClientRect();camera.aspect=r.width/r.height;camera.updateProjectionMatrix();renderer.setSize(r.width,r.height,false);labels.setSize(r.width,r.height)}addEventListener('resize',resize);resize();
+(function render(){requestAnimationFrame(render);controls.update();renderer.render(scene,camera);labels.render(scene,camera)})();
+function leaves(node,out=[]){if(node.expressID!==undefined&&(!node.children||!node.children.length))out.push(node.expressID);(node.children||[]).forEach(n=>leaves(n,out));return out}
+function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
+function tuneMaterials(root){root.traverse(o=>{if(!o.isMesh)return;o.castShadow=true;o.receiveShadow=true;const mats=Array.isArray(o.material)?o.material:[o.material];mats.filter(Boolean).forEach(m=>{if('roughness'in m)m.roughness=.48;if('metalness'in m)m.metalness=Math.min(m.metalness??0,.08);m.envMapIntensity=1.05;m.needsUpdate=true})})}
+async function openIFC(file){if(!file||!file.name.toLowerCase().endsWith('.ifc'))return message('Please select an IFC file',true);message(`Loading ${file.name}`);$('model-name').textContent=file.name;$('drop-zone').style.display='none';clearModel();const url=URL.createObjectURL(file);try{model=await loader.loadAsync(url,e=>{if(e.total)status.textContent=`LOADING ${Math.round(e.loaded/e.total*100)}%`});modelID=model.modelID;tuneMaterials(model);scene.add(model);spatial=await loader.ifcManager.getSpatialStructure(modelID,true);buildTree(spatial);buildCategories(spatial);fit();message(`${file.name} loaded`)}catch(e){console.error(e);$('drop-zone').style.display='grid';message('IFC could not be opened. Check Console',true)}finally{URL.revokeObjectURL(url)}}
+function clearModel(){if(model){scene.remove(model);try{loader.ifcManager.close(modelID)}catch{}model=null}clearHighlight();hidden.clear();isolated=null;spatial=null;modelID=null;$('model-tree').innerHTML='';$('categories').innerHTML='';$('properties').innerHTML='<p class="empty-state">Select an element to inspect its IFC properties.</p>';clearMeasurements()}
+function fit(){if(!model)return;const box=new THREE.Box3().setFromObject(model),size=box.getSize(new THREE.Vector3()),centre=box.getCenter(new THREE.Vector3()),max=Math.max(size.x,size.y,size.z)||10;camera.near=Math.max(max/10000,.01);camera.far=max*120;camera.updateProjectionMatrix();camera.position.copy(centre).add(new THREE.Vector3(max*.86,max*.64,max*.86));controls.target.copy(centre);controls.update();grid.position.y=box.min.y-.015;ground.position.y=box.min.y-.02;clipPlane.constant=centre.y;const d=max*2.2;key.shadow.camera.left=-d;key.shadow.camera.right=d;key.shadow.camera.top=d;key.shadow.camera.bottom=-d;key.shadow.camera.near=.1;key.shadow.camera.far=max*8;key.shadow.camera.updateProjectionMatrix()}
+function buildTree(root){const host=$('model-tree');host.innerHTML='';host.appendChild(treeNode(root,true));updateEyes()}
+function treeNode(node,open=false){const d=document.createElement('details');d.dataset.id=node.expressID;d.open=open;const s=document.createElement('summary'),label=document.createElement('span'),eye=document.createElement('button');label.className='tree-label';label.textContent=`${node.type||'ITEM'} · ${node.expressID}`;label.onclick=e=>{e.stopPropagation();select(node.expressID,true)};eye.type='button';eye.className='eye-button';eye.innerHTML='<span class="eye-icon"></span>';eye.dataset.ids=leaves(node,[]).join(',');eye.onclick=e=>{e.preventDefault();e.stopPropagation();const ids=eye.dataset.ids.split(',').filter(Boolean).map(Number),hide=ids.some(id=>!hidden.has(id));ids.forEach(id=>hide?hidden.add(id):hidden.delete(id));isolated=null;refreshVisibility();updateEyes();message(hide?'Model item hidden':'Model item shown')};s.append(label,eye);d.appendChild(s);(node.children||[]).forEach(c=>d.appendChild(treeNode(c)));return d}
+function updateEyes(){document.querySelectorAll('.eye-button').forEach(b=>{const ids=b.dataset.ids.split(',').filter(Boolean).map(Number);b.classList.toggle('hidden',ids.length>0&&ids.every(id=>hidden.has(id)))})}
+function buildCategories(root){const map=new Map();(function walk(n){if(n.expressID!==undefined&&(!n.children||!n.children.length)){const k=n.type||'IFCITEM';if(!map.has(k))map.set(k,[]);map.get(k).push(n.expressID)}(n.children||[]).forEach(walk)})(root);const host=$('categories');host.innerHTML='';[...map.entries()].sort().forEach(([name,ids])=>{const row=document.createElement('div'),cb=document.createElement('input'),label=document.createElement('label'),badge=document.createElement('span');row.className='category-row';cb.type='checkbox';cb.checked=true;cb.onchange=()=>{ids.forEach(id=>cb.checked?hidden.delete(id):hidden.add(id));isolated=null;refreshVisibility();updateEyes()};label.textContent=name;badge.className='badge';badge.textContent=ids.length;row.append(cb,label,badge);host.appendChild(row)})}
+function hit(e){if(!model)return null;const r=renderer.domElement.getBoundingClientRect();mouse.x=((e.clientX-r.left)/r.width)*2-1;mouse.y=-((e.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(mouse,camera);const hits=raycaster.intersectObject(model,true);if(!hits.length)return null;const h=hits[0];return{...h,id:loader.ifcManager.getExpressId(h.object.geometry,h.faceIndex)}}
+renderer.domElement.addEventListener('pointerdown',e=>{if(e.button!==0)return;const h=hit(e);if(!h)return;mode==='measure'?addMeasure(h.point):select(h.id,true)});
+async function select(id,props){if(id==null||!model)return;selectedID=id;clearHighlight();loader.ifcManager.createSubset({modelID,ids:[id],removePrevious:true,customID:'highlight',material:new THREE.MeshStandardMaterial({color:0xffed00,emissive:0x594f00,roughness:.38,metalness:.05,depthTest:false,transparent:true,opacity:.82})});if(props)await showProperties(id);document.querySelectorAll('.tree .selected').forEach(n=>n.classList.remove('selected'));const n=document.querySelector(`.tree details[data-id="${id}"]`);if(n){n.classList.add('selected');let p=n.parentElement;while(p&&p.tagName==='DETAILS'){p.open=true;p=p.parentElement}}}
+function clearHighlight(){if(modelID!=null)try{loader.ifcManager.removeSubset(modelID,null,'highlight')}catch{}}
+async function showProperties(id){const host=$('properties');host.innerHTML='<p class="empty-state">Loading properties…</p>';try{const groups=[['Identity',await loader.ifcManager.getItemProperties(modelID,id,true)],['Property sets',await loader.ifcManager.getPropertySets(modelID,id,true)],['Type',await loader.ifcManager.getTypeProperties(modelID,id,true)],['Materials',await loader.ifcManager.getMaterialsProperties(modelID,id,true)]];host.innerHTML='';groups.forEach(([t,d],i)=>host.appendChild(propertyGroup(t,d,i===0)));document.querySelector('[data-tab="properties"]').click()}catch(e){console.error(e);host.innerHTML='<p class="empty-state">Properties could not be read.</p>'}}
+function primitive(v){if(v==null)return'';if(typeof v==='object'){if('value'in v)return v.value;if(v.Name?.value)return v.Name.value;try{return JSON.stringify(v,(k,x)=>typeof x==='object'&&x&&'value'in x?x.value:x).slice(0,650)}catch{return'[Object]'}}return v}
+function propertyGroup(title,data,open){const g=document.createElement('details'),s=document.createElement('summary');g.className='property-group';g.open=open;s.textContent=title;g.appendChild(s);let count=0;for(const obj of(Array.isArray(data)?data:[data])){if(!obj||typeof obj!=='object')continue;for(const[k,v]of Object.entries(obj)){if(['expressID','type'].includes(k)||v==null)continue;const row=document.createElement('div');row.className='property-row';row.innerHTML=`<span>${esc(k)}</span><span>${esc(primitive(v))}</span>`;g.appendChild(row);if(++count>140)break}if(count>140)break}if(!count){const p=document.createElement('p');p.className='empty-state';p.textContent='No values returned.';g.appendChild(p)}return g}
+function refreshVisibility(){if(!model)return;try{loader.ifcManager.removeSubset(modelID,null,'visibility')}catch{}const ids=isolated?[...isolated]:leaves(spatial,[]).filter(id=>!hidden.has(id));model.visible=false;if(ids.length){const subset=loader.ifcManager.createSubset({modelID,ids,removePrevious:true,customID:'visibility',scene,applyBVH:false});if(subset)tuneMaterials(subset)}}
+$('hide-btn').onclick=()=>{if(selectedID==null)return message('Select an element first',true);hidden.add(selectedID);selectedID=null;clearHighlight();refreshVisibility();updateEyes();message('Selected element hidden')};$('isolate-btn').onclick=()=>{if(selectedID==null)return message('Select an element first',true);isolated=new Set([selectedID]);refreshVisibility();message('Selected element isolated')};$('show-all-btn').onclick=()=>{hidden.clear();isolated=null;if(model)model.visible=true;try{loader.ifcManager.removeSubset(modelID,null,'visibility')}catch{}document.querySelectorAll('#categories input').forEach(x=>x.checked=true);updateEyes();message('All elements restored')};
+function setMode(m){mode=m;document.querySelectorAll('.tool').forEach(b=>b.classList.remove('active'));$(m==='measure'?'measure-tool':'select-tool').classList.add('active');message(m==='measure'?'Touch two points to measure':'Selection active')}$('select-tool').onclick=()=>setMode('select');$('measure-tool').onclick=()=>{clearMeasurements();setMode('measure')};
+function addMeasure(p){measurePoints.push(p.clone());const dot=new THREE.Mesh(new THREE.SphereGeometry(.04,16,16),new THREE.MeshBasicMaterial({color:0xe30613,depthTest:false}));dot.position.copy(p);scene.add(dot);measureObjects.push(dot);if(measurePoints.length===2){const[a,b]=measurePoints,line=new THREE.Line(new THREE.BufferGeometry().setFromPoints([a,b]),new THREE.LineBasicMaterial({color:0xe30613,depthTest:false}));scene.add(line);measureObjects.push(line);const dist=a.distanceTo(b),el=document.createElement('div');el.className='measure-label';el.textContent=`${dist.toFixed(3)} model units`;const l=new CSS2DObject(el);l.position.copy(a.clone().add(b).multiplyScalar(.5));scene.add(l);measureObjects.push(l);message(`Distance ${dist.toFixed(3)} model units`);setMode('select')}}function clearMeasurements(){measureObjects.forEach(o=>scene.remove(o));measureObjects=[];measurePoints=[]}
+$('clip-tool').onclick=()=>{if(!model)return message('Open a model first',true);clipOn=!clipOn;renderer.clippingPlanes=clipOn?[clipPlane]:[];$('clip-tool').classList.toggle('active',clipOn);message(clipOn?'Horizontal section enabled':'Section disabled')};
+$('file-input').onchange=e=>openIFC(e.target.files[0]);['dragenter','dragover'].forEach(t=>viewer.addEventListener(t,e=>{e.preventDefault();$('drop-zone').classList.add('drag')}));['dragleave','drop'].forEach(t=>viewer.addEventListener(t,e=>{e.preventDefault();$('drop-zone').classList.remove('drag')}));viewer.addEventListener('drop',e=>openIFC(e.dataTransfer.files[0]));$('fit-btn').onclick=fit;$('fullscreen-btn').onclick=()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();$('expand-tree').onclick=()=>document.querySelectorAll('.tree details').forEach(d=>d.open=true);$('collapse-tree').onclick=()=>document.querySelectorAll('.tree details').forEach(d=>d.open=false);
+$('tree-search').oninput=e=>{const q=e.target.value.toLowerCase();document.querySelectorAll('.tree details').forEach(d=>{const text=d.querySelector(':scope > summary .tree-label')?.textContent.toLowerCase()||'';d.style.display=!q||text.includes(q)?'':'none';if(q&&text.includes(q)){let p=d.parentElement;while(p&&p.tagName==='DETAILS'){p.style.display='';p.open=true;p=p.parentElement}}})};document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.tab,.tab-content').forEach(x=>x.classList.remove('active'));t.classList.add('active');$(t.dataset.tab+'-tab').classList.add('active')});
